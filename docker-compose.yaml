@@ -1,6 +1,10 @@
-version: '3.8'
+version: "3.8"
 
 services:
+  # =========================
+  # Keycloak + база Keycloak
+  # =========================
+
   keycloak_db:
     image: postgres:14
     environment:
@@ -8,6 +12,7 @@ services:
       POSTGRES_USER: keycloak_user
       POSTGRES_PASSWORD: keycloak_password
     volumes:
+      # Данные Keycloak храним на хосте, чтобы не терять realm и пользователей
       - ./postgres-keycloak-data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
@@ -15,21 +20,30 @@ services:
   keycloak:
     image: quay.io/keycloak/keycloak:21.1
     environment:
+      # Администратор Keycloak (только для dev)
       KEYCLOAK_ADMIN: admin
       KEYCLOAK_ADMIN_PASSWORD: admin
+
+      # Настройка подключения к Postgres
       KC_DB: postgres
       KC_DB_URL: jdbc:postgresql://keycloak_db:5432/keycloak_db
       KC_DB_USERNAME: keycloak_user
       KC_DB_PASSWORD: keycloak_password
     command:
+      # start-dev + импорт realm из файла
       - start-dev
       - --import-realm
     volumes:
+      # Экспортированный realm с клиентами и ролями
       - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json
     ports:
       - "8080:8080"
     depends_on:
       - keycloak_db
+
+  # =========
+  # Frontend
+  # =========
 
   frontend:
     build:
@@ -38,13 +52,19 @@ services:
     ports:
       - "3000:3000"
     environment:
+      # Фронт работает в браузере, поэтому обращается к API через localhost
       REACT_APP_API_URL: http://localhost:8000
       REACT_APP_KEYCLOAK_URL: http://localhost:8080
-      # ВАЖНО: realm должен совпадать 1-в-1 с realm-export.json (с учётом регистра)
+
+      # Realm и client_id должны совпадать с настройками в Keycloak
       REACT_APP_KEYCLOAK_REALM: reports-realm
       REACT_APP_KEYCLOAK_CLIENT_ID: reports-frontend
     depends_on:
       - keycloak
+
+  # =====================
+  # Источники данных (DB)
+  # =====================
 
   telemetry_db:
     image: postgres:14
@@ -55,7 +75,9 @@ services:
     ports:
       - "5434:5432"
     volumes:
+      # Храним данные телеметрии
       - ./postgres-telemetry-data:/var/lib/postgresql/data
+      # SQL-скрипты инициализации (создание таблиц, тестовые данные)
       - ./postgres/telemetry:/docker-entrypoint-initdb.d
 
   crm_db:
@@ -67,17 +89,39 @@ services:
     ports:
       - "5435:5432"
     volumes:
+      # Храним данные CRM
       - ./postgres-crm-data:/var/lib/postgresql/data
       - ./postgres/crm:/docker-entrypoint-initdb.d
+
+  # ==========
+  # ClickHouse
+  # ==========
 
   clickhouse:
     image: clickhouse/clickhouse-server:24.3
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "8123:8123"   # HTTP-интерфейс
+      - "9000:9000"   # Native TCP
+    environment:
+      # Явно задаём пользователя и пароль,
+      # иначе entrypoint ограничит доступ default-пользователю
+      CLICKHOUSE_USER: admin
+      CLICKHOUSE_PASSWORD: admin
     volumes:
+      # Данные ClickHouse
       - ./clickhouse-data:/var/lib/clickhouse
+      # Init-скрипты (создание пользователей, staging и mart таблиц)
       - ./clickhouse/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      # Healthcheck нужен, чтобы Airflow не стартовал раньше ClickHouse
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # ==========
+  # Airflow DB
+  # ==========
 
   airflow_db:
     image: postgres:14
@@ -86,52 +130,100 @@ services:
       POSTGRES_USER: airflow
       POSTGRES_PASSWORD: airflow
     volumes:
+      # Метаданные Airflow
       - ./postgres-airflow-data:/var/lib/postgresql/data
+
+  # =================
+  # Airflow Webserver
+  # =================
 
   airflow-webserver:
     image: apache/airflow:2.8.4
     depends_on:
-      - airflow_db
-      - clickhouse
-      - telemetry_db
-      - crm_db
+      airflow_db:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+      telemetry_db:
+        condition: service_started
+      crm_db:
+        condition: service_started
     environment:
+      # Используем LocalExecutor — задачи выполняются scheduler'ом
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
+
+      # Подключение к метабазе Airflow
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
+
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "False"
-      # Рекомендуется зафиксировать, но для учебного проекта можно оставить закомментированным
-      # AIRFLOW__CORE__FERNET_KEY: "PASTE_YOUR_KEY_HERE"
-      # Чтобы DAG с PostgresHook/HttpHook точно импортировался:
+
+      # Провайдеры, которые используются в DAG (PostgresHook, HttpHook)
       _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-http
+
+      # Connections задаём через env, чтобы не настраивать их вручную в UI
+      AIRFLOW_CONN_CLICKHOUSE_HTTP: http://admin:admin@clickhouse:8123
+      AIRFLOW_CONN_CRM_DB: postgresql://crm_user:crm_password@crm_db:5432/crm
+      AIRFLOW_CONN_TELEMETRY_DB: postgresql://telemetry_user:telemetry_password@telemetry_db:5432/telemetry
+
+      # Фикс корректной работы ссылок и редиректов в UI
+      AIRFLOW__WEBSERVER__BASE_URL: http://localhost:8081
+      AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX: "True"
     volumes:
+      # DAG-и и логи выносим на хост
       - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
     ports:
       - "8081:8080"
     command: >
       bash -c "
       airflow db migrate &&
-      airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true &&
+      airflow users create
+        --username admin
+        --password admin
+        --firstname Admin
+        --lastname Admin
+        --role Admin
+        --email admin@example.com || true &&
       airflow webserver
       "
+
+  # ==================
+  # Airflow Scheduler
+  # ==================
 
   airflow-scheduler:
     image: apache/airflow:2.8.4
     depends_on:
-      - airflow-webserver
+      airflow-webserver:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
     environment:
       AIRFLOW__CORE__EXECUTOR: LocalExecutor
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow_db:5432/airflow
       AIRFLOW__CORE__LOAD_EXAMPLES: "False"
-      # AIRFLOW__CORE__FERNET_KEY: "PASTE_YOUR_KEY_HERE"
+
       _PIP_ADDITIONAL_REQUIREMENTS: apache-airflow-providers-postgres apache-airflow-providers-http
+
+      # При LocalExecutor именно scheduler исполняет таски,
+      # поэтому все connections нужны и здесь
+      AIRFLOW_CONN_CLICKHOUSE_HTTP: http://admin:admin@clickhouse:8123
+      AIRFLOW_CONN_CRM_DB: postgresql://crm_user:crm_password@crm_db:5432/crm
+      AIRFLOW_CONN_TELEMETRY_DB: postgresql://telemetry_user:telemetry_password@telemetry_db:5432/telemetry
     volumes:
       - ./airflow/dags:/opt/airflow/dags
+      - ./airflow/logs:/opt/airflow/logs
     command: >
       bash -c "
       airflow db migrate &&
       airflow scheduler
       "
+
+  # ============
+  # Reports API
+  # ============
+
   reports_api:
     build:
       context: ./reports-api
@@ -139,13 +231,24 @@ services:
     environment:
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_REALM: reports-realm
+      KEYCLOAK_ISSUER: http://localhost:8080/realms/reports-realm
+      JWKS_URL: http://keycloak:8080/realms/reports-realm/protocol/openid-connect/certs
+      # Подключение к ClickHouse (витрина отчётов)
       CH_HOST: clickhouse
       CH_PORT: "8123"
-      CH_USER: default
-      CH_PASSWORD: ""
+      CH_USER: admin
+      CH_PASSWORD: admin
+
+      # Таблица витрины
       MART_TABLE: report_mart_user_telemetry_hourly
+    extra_hosts:
+      # На Docker Desktop (Mac/Windows) host.docker.internal обычно уже работает,
+      # но эта строка делает поведение предсказуемым и на Linux (где требуется host-gateway).
+      - "host.docker.internal:host-gateway"
     ports:
       - "8000:8000"
     depends_on:
-      - clickhouse
-      - keycloak
+      clickhouse:
+        condition: service_healthy
+      keycloak:
+        condition: service_started

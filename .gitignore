@@ -1,2 +1,28 @@
-/postgres-keycloak-data
-2024__yandex-architecture-sso.code-workspace
+# IntelliJ IDEA
+.idea/
+*.iml
+
+# Env files
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+
+# Node / React
+node_modules/
+build/
+dist/
+
+# Docker volumes / local data
+postgres-*-data/
+clickhouse-data/
+airflow/logs/
+airflow/plugins/__pycache__/
+
+# OS
+.DS_Store
