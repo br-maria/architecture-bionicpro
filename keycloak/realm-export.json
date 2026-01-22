@@ -107,6 +107,51 @@
           }
         ],
         "realmRoles": ["prothetic_user"]
+      },
+      {
+        "username": "u-001",
+        "enabled": true,
+        "email": "u-001@example.com",
+        "firstName": "User",
+        "lastName": "001",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "password123",
+            "temporary": false
+          }
+        ],
+        "realmRoles": ["user"]
+      },
+      {
+        "username": "u-002",
+        "enabled": true,
+        "email": "u-002@example.com",
+        "firstName": "User",
+        "lastName": "002",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "password123",
+            "temporary": false
+          }
+        ],
+        "realmRoles": ["user"]
+      },
+      {
+        "username": "u-003",
+        "enabled": true,
+        "email": "u-003@example.com",
+        "firstName": "User",
+        "lastName": "003",
+        "credentials": [
+          {
+            "type": "password",
+            "value": "password123",
+            "temporary": false
+          }
+        ],
+        "realmRoles": ["user"]
       }
     ],
     "clients": [
@@ -127,7 +172,7 @@
         "clientId": "reports-api",
         "enabled": true,
         "clientAuthenticatorType": "client-secret",
-        "secret": "oNwoLQdvJAvRcL89SydqCWCe5ry1jMgq", 
+        "secret": "oNwoLQdvJAvRcL89SydqCWCe5ry1jMgq",
         "bearerOnly": true
       }
     ]

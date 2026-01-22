@@ -16,13 +16,33 @@ const ReportPage: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/reports`, {
+      const url = `${process.env.REACT_APP_API_URL}/reports?format=csv`;
+
+      const response = await fetch(url, {
+        method: 'GET',
         headers: {
-          'Authorization': `Bearer ${keycloak.token}`
+          'Authorization': `Bearer ${keycloak.token}`,
+          'Accept': 'text/csv'
         }
       });
 
-      
+      if (!response.ok) {
+        const details = await response.text().catch(() => '');
+        throw new Error(details || `Request failed (${response.status})`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = window.URL.createObjectURL(blob);
+
+      const fileName = `report_${new Date().toISOString().slice(0, 10)}.csv`;
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = fileName;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(objectUrl);
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred');
     } finally {
@@ -51,12 +71,12 @@ const ReportPage: React.FC = () => {
     <div className="flex flex-col items-center justify-center min-h-screen bg-gray-100">
       <div className="p-8 bg-white rounded-lg shadow-md">
         <h1 className="text-2xl font-bold mb-6">Usage Reports</h1>
-        
+
         <button
           onClick={downloadReport}
           disabled={loading}
-          className={`px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 ${
-            loading ? 'opacity-50 cursor-not-allowed' : ''
+          className={`px-4 py-2 rounded text-white ${
+            loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-500 hover:bg-green-600'
           }`}
         >
           {loading ? 'Generating Report...' : 'Download Report'}
